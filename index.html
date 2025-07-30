@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>西西弗斯模拟器</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            touch-action: none;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: grid;
+            grid-template-columns: repeat(3, 60px);
+            grid-template-rows: repeat(3, 60px);
+            gap: 5px;
+        }
+        .control-btn {
+            width: 60px;
+            height: 60px;
+            background-color: rgba(200, 200, 200, 0.3);
+            border: 2px solid rgba(255, 255, 255, 0.7);
+            border-radius: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 24px;
+            font-weight: bold;
+            user-select: none;
+        }
+        .active {
+            background-color: rgba(255, 255, 255, 0.5);
+            color: rgba(0, 0, 0, 0.8);
+        }
+        #w { grid-column: 2; grid-row: 1; }
+        #a { grid-column: 1; grid-row: 2; }
+        #s { grid-column: 2; grid-row: 2; }
+        #d { grid-column: 3; grid-row: 2; }
+        #goal-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 48px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <p id="progress">进度: 0%</p>
+    </div>
+    
+    <div id="controls">
+        <div id="w" class="control-btn">W</div>
+        <div id="a" class="control-btn">A</div>
+        <div id="s" class="control-btn">S</div>
+        <div id="d" class="control-btn">D</div>
+    </div>
+    
+    <div id="goal-message">成功！巨石已到达山顶</div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+    
+    <script>
+        // 初始化Three.js场景
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // 天空蓝
+        
+        // 初始化相机
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2, 5);
+        
+        // 初始化渲染器
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+        
+        // 初始化物理世界
+        const world = new CANNON.World();
+        world.gravity.set(0, -9.82, 0); // 地球重力
+        world.broadphase = new CANNON.NaiveBroadphase();
+        world.solver.iterations = 10;
+        
+        // 创建接触材质
+        const groundMaterial = new CANNON.Material("groundMaterial");
+        const rockMaterial = new CANNON.Material("rockMaterial");
+        const playerMaterial = new CANNON.Material("playerMaterial");
+        
+        // 地面和石头的接触材质
+        const groundRockContact = new CANNON.ContactMaterial(
+            groundMaterial,
+            rockMaterial,
+            { friction: 0.9, restitution: 0.3 }
+        );
+        world.addContactMaterial(groundRockContact);
+        
+        // 地面和玩家的接触材质
+        const groundPlayerContact = new CANNON.ContactMaterial(
+            groundMaterial,
+            playerMaterial,
+            { friction: 0.8, restitution: 0.2 }
+        );
+        world.addContactMaterial(groundPlayerContact);
+        
+        // 添加光源
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 10);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 1024;
+        directionalLight.shadow.mapSize.height = 1024;
+        scene.add(directionalLight);
+        
+        // 创建地面
+        const groundGeometry = new THREE.PlaneGeometry(100, 100);
+        const groundMaterialVisual = new THREE.MeshStandardMaterial({ 
+            color: 0x4a6b0b,
+            side: THREE.DoubleSide
+        });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterialVisual);
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+        
+        // 物理地面
+        const groundShape = new CANNON.Plane();
+        const groundBody = new CANNON.Body({ mass: 0, material: groundMaterial });
+        groundBody.addShape(groundShape);
+        groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+        world.addBody(groundBody);
+        
+        // 斜坡参数
+        const rampLength = 30;
+        const rampHeight = 10;
+        const rampWidth = 10;
+        
+        // 创建斜坡 (绕Y轴旋转180度)
+        const rampGeometry = new THREE.BoxGeometry(rampWidth, 0.5, rampLength);
+        const rampMaterial = new THREE.MeshStandardMaterial({ color: 0x6B3513 });
+        const ramp = new THREE.Mesh(rampGeometry, rampMaterial);
+        ramp.position.set(0, 0, -rampLength/2 - 5); // 调整斜坡位置
+        ramp.rotation.x = Math.atan(rampHeight / rampLength); // 斜坡倾斜角度
+        ramp.castShadow = true;
+        ramp.receiveShadow = true;
+        scene.add(ramp);
+        
+        // 物理斜坡
+        const rampShape = new CANNON.Box(new CANNON.Vec3(rampWidth/2, 0.25, rampLength/2));
+        const rampBody = new CANNON.Body({ 
+            mass: 0,
+            material: groundMaterial
+        });
+        rampBody.addShape(rampShape);
+        rampBody.position.copy(ramp.position);
+        rampBody.quaternion.copy(ramp.quaternion);
+        world.addBody(rampBody);
+        
+        // 创建山顶平台 (位置与斜坡顶端对齐)
+        const platformGeometry = new THREE.BoxGeometry(10, 0.5, 10);
+        const platformMaterial = new THREE.MeshStandardMaterial({ color: 0x6B3513 });
+        const platform = new THREE.Mesh(platformGeometry, platformMaterial);
+        platform.position.set(0, rampHeight-5, -rampLength - 10); // 与斜坡顶端连接
+        platform.castShadow = true;
+        platform.receiveShadow = true;
+        scene.add(platform);
+        
+        // 物理平台
+        const platformShape = new CANNON.Box(new CANNON.Vec3(5, 0.25, 5));
+        const platformBody = new CANNON.Body({ 
+            mass: 0,
+            material: groundMaterial
+        });
+        platformBody.addShape(platformShape);
+        platformBody.position.copy(platform.position);
+        world.addBody(platformBody);
+        
+        // 创建巨石（使用内置材质）
+        const rockGeometry = new THREE.SphereGeometry(1, 32, 32);
+        const rockMaterialVisual = new THREE.MeshStandardMaterial({ 
+            color: 0x606060,
+            roughness: 0.7,
+            metalness: 0.3
+        });
+        const rock = new THREE.Mesh(rockGeometry, rockMaterialVisual);
+        rock.position.set(0, 2, 5); // 初始位置调整到斜坡下方
+        rock.castShadow = true;
+        rock.receiveShadow = true;
+        scene.add(rock);
+        
+        // 物理巨石
+        const rockShape = new CANNON.Sphere(1);
+        const rockBody = new CANNON.Body({ 
+            mass: 5,
+            material: rockMaterial
+        });
+        rockBody.addShape(rockShape);
+        rockBody.position.copy(rock.position);
+        rockBody.linearDamping = 0.5;
+        rockBody.angularDamping = 0.5;
+        world.addBody(rockBody);
+        
+        // 创建玩家碰撞体
+        const playerShape = new CANNON.Sphere(0.5);
+        const playerBody = new CANNON.Body({ 
+            mass: 1,
+            material: playerMaterial
+        });
+        playerBody.addShape(playerShape);
+        playerBody.position.set(0, 2, 5); // 初始位置与石头相同
+        playerBody.fixedRotation = true;
+        playerBody.linearDamping = 0.7;
+        world.addBody(playerBody);
+        
+        // 视角控制变量
+        let isDragging = false;
+        let previousTouchX = 0;
+        let previousTouchY = 0;
+        let yaw = 0; // 初始朝向调整
+        let pitch = 0;
+        const sensitivity = 0.005;
+        
+        // 触摸事件处理
+        function handleTouchStart(e) {
+            if (e.touches.length === 1) {
+                isDragging = true;
+                previousTouchX = e.touches[0].clientX;
+                previousTouchY = e.touches[0].clientY;
+                e.preventDefault();
+            }
+        }
+        
+        function handleTouchMove(e) {
+            if (isDragging && e.touches.length === 1) {
+                const touchX = e.touches[0].clientX;
+                const touchY = e.touches[0].clientY;
+                
+                const deltaX = touchX - previousTouchX;
+                const deltaY = touchY - previousTouchY;
+                
+                yaw -= deltaX * sensitivity;
+                pitch -= deltaY * sensitivity;
+                
+                pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
+                
+                previousTouchX = touchX;
+                previousTouchY = touchY;
+                e.preventDefault();
+            }
+        }
+        
+        function handleTouchEnd() {
+            isDragging = false;
+        }
+        
+        document.addEventListener('touchstart', handleTouchStart, { passive: false });
+        document.addEventListener('touchmove', handleTouchMove, { passive: false });
+        document.addEventListener('touchend', handleTouchEnd);
+        
+        // 键盘控制
+        const keys = {
+            w: false,
+            a: false,
+            s: false,
+            d: false
+        };
+        
+        // 键盘事件监听
+        document.addEventListener('keydown', (event) => {
+            switch(event.key.toLowerCase()) {
+                case 'w': keys.w = true; document.getElementById('w').classList.add('active'); break;
+                case 'a': keys.a = true; document.getElementById('a').classList.add('active'); break;
+                case 's': keys.s = true; document.getElementById('s').classList.add('active'); break;
+                case 'd': keys.d = true; document.getElementById('d').classList.add('active'); break;
+            }
+        });
+        
+        document.addEventListener('keyup', (event) => {
+            switch(event.key.toLowerCase()) {
+                case 'w': keys.w = false; document.getElementById('w').classList.remove('active'); break;
+                case 'a': keys.a = false; document.getElementById('a').classList.remove('active'); break;
+                case 's': keys.s = false; document.getElementById('s').classList.remove('active'); break;
+                case 'd': keys.d = false; document.getElementById('d').classList.remove('active'); break;
+            }
+        });
+        
+        // 虚拟按键控制
+        const controlButtons = document.querySelectorAll('.control-btn');
+        controlButtons.forEach(button => {
+            button.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const key = button.id;
+                keys[key] = true;
+                button.classList.add('active');
+            });
+            
+            button.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                const key = button.id;
+                keys[key] = false;
+                button.classList.remove('active');
+            });
+            
+            button.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                const key = button.id;
+                keys[key] = true;
+                button.classList.add('active');
+            });
+            
+            button.addEventListener('mouseup', (e) => {
+                e.preventDefault();
+                const key = button.id;
+                keys[key] = false;
+                button.classList.remove('active');
+            });
+            
+            button.addEventListener('mouseleave', (e) => {
+                e.preventDefault();
+                const key = button.id;
+                keys[key] = false;
+                button.classList.remove('active');
+            });
+        });
+        
+        // 游戏状态
+        let gameWon = false;
+        const goalPosition = new CANNON.Vec3(0, rampHeight, -rampLength - 5); // 目标位置调整
+        const startPosition = new CANNON.Vec3(0, 2, 5); // 起始位置调整
+        
+        // 动画循环
+        const clock = new THREE.Clock();
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const deltaTime = clock.getDelta();
+            if (deltaTime > 0.1) return;
+            
+            world.step(1/60, deltaTime, 3);
+            
+            camera.rotation.set(pitch, yaw, 0, 'YXZ');
+            
+            // 检查是否在推石头
+            const playerToRock = new CANNON.Vec3();
+            playerToRock.copy(rockBody.position);
+            playerToRock.vsub(playerBody.position, playerToRock);
+            const distanceToRock = playerToRock.length();
+            const isPushing = distanceToRock < 2.5;
+            
+            // 移动速度
+            const normalSpeed = 8;
+            const pushingSpeed = 3;
+            const currentSpeed = isPushing ? pushingSpeed : normalSpeed;
+            
+            // 更新玩家移动
+            const moveVector = new CANNON.Vec3(0, 0, 0);
+            
+            if (keys.w) moveVector.z -= -1;
+            if (keys.s) moveVector.z += -1;
+            if (keys.a) moveVector.x -= 1;
+            if (keys.d) moveVector.x += 1;
+            
+            // 根据相机方向移动
+            const forward = new CANNON.Vec3(
+                -Math.sin(yaw),
+                0,
+                -Math.cos(yaw)
+            );
+            
+            const right = new CANNON.Vec3(
+                Math.cos(yaw),
+                0,
+                -Math.sin(yaw)
+            );
+            
+            const moveDirection = new CANNON.Vec3();
+            moveDirection.x = forward.x * moveVector.z + right.x * moveVector.x;
+            moveDirection.z = forward.z * moveVector.z + right.z * moveVector.x;
+            
+            if (moveDirection.length() > 0) {
+                moveDirection.normalize();
+                moveDirection.scale(currentSpeed, moveDirection);
+            }
+            
+            playerBody.velocity.x = moveDirection.x;
+            playerBody.velocity.z = moveDirection.z;
+            
+            // 防止玩家飞出
+            if (playerBody.position.y < 0) {
+                playerBody.position.copy(startPosition);
+                playerBody.velocity.set(0, 0, 0);
+                rockBody.position.copy(startPosition);
+                rockBody.velocity.set(0, 0, 0);
+                rockBody.angularVelocity.set(0, 0, 0);
+            }
+            
+            // 更新相机位置
+            camera.position.copy(playerBody.position);
+            camera.position.y += 0.5;
+            
+            // 更新巨石位置
+            rock.position.copy(rockBody.position);
+            rock.quaternion.copy(rockBody.quaternion);
+            
+            // 检查是否到达目标
+            if (!gameWon) {
+                const distance = rockBody.position.distanceTo(goalPosition);
+                const maxDistance = startPosition.distanceTo(goalPosition);
+                const progress = 100 - Math.min(100, (distance / maxDistance) * 100);
+                document.getElementById('progress').textContent = `进度: ${progress.toFixed(1)}%`;
+                
+                if (distance < 2) {
+                    gameWon = true;
+                    document.getElementById('goal-message').style.display = 'block';
+                    setTimeout(() => {
+                        document.getElementById('goal-message').style.display = 'none';
+                        resetGame();
+                    }, 3000);
+                }
+            }
+            
+            renderer.render(scene, camera);
+        }
+        
+        // 重置游戏
+        function resetGame() {
+            gameWon = false;
+            rockBody.position.copy(startPosition);
+            rockBody.velocity.set(0, 0, 0);
+            rockBody.angularVelocity.set(0, 0, 0);
+            playerBody.position.copy(startPosition);
+            playerBody.velocity.set(0, 0, 0);
+            yaw = 0;
+            pitch = 0;
+        }
+        
+        // 窗口大小调整
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        animate();
+    </script>
+</body>
+</html>
