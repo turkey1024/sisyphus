@@ -157,15 +157,15 @@
         // 斜坡参数
         const rampLength = 30;
         const rampHeight = 10;
-        const rampWidth = 20;
+        const rampWidth = 10;
         
         // 创建斜坡 (绕Y轴旋转180度)
         const rampGeometry = new THREE.BoxGeometry(rampWidth, 0.5, rampLength);
         const rampMaterial = new THREE.MeshStandardMaterial({ color: 0x6B3513 });
         const ramp = new THREE.Mesh(rampGeometry, rampMaterial);
         ramp.position.set(0, 0, -rampLength/2 - 5); // 调整斜坡位置
-        ramp.rotation.x = -Math.atan(rampHeight / rampLength); // 斜坡倾斜角度
-        ramp.rotation.y = Math.PI; // 绕Y轴旋转180度
+        ramp.rotation.x = Math.atan(rampHeight / rampLength); // 斜坡倾斜角度
+
         ramp.castShadow = true;
         ramp.receiveShadow = true;
         scene.add(ramp);
@@ -185,7 +185,7 @@
         const platformGeometry = new THREE.BoxGeometry(10, 0.5, 10);
         const platformMaterial = new THREE.MeshStandardMaterial({ color: 0x6B3513 });
         const platform = new THREE.Mesh(platformGeometry, platformMaterial);
-        platform.position.set(0, rampHeight, -rampLength - 5); // 与斜坡顶端连接
+        platform.position.set(0, rampHeight-5, -rampLength - 5); // 与斜坡顶端连接
         platform.castShadow = true;
         platform.receiveShadow = true;
         scene.add(platform);
